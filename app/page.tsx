@@ -1,112 +1,429 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { RITUAL_CHAIN } from "@/lib/chain";
 
-declare global {
-  interface Window {
-    ethereum?: {
-      request: (args: { method: string; params?: unknown[] }) => Promise<unknown>;
-    };
-  }
-}
-
+type Cell = 0 | 1;
 type Piece = number[][];
-const SIZE = 8;
-const emptyBoard = () => Array.from({ length: SIZE }, () => Array(SIZE).fill(false) as boolean[]);
-const pieces: Piece[] = [
-  [[1,1,1]], [[1],[1],[1]], [[1,1],[1,1]], [[1,0],[1,0],[1,1]], [[0,1],[0,1],[1,1]], [[1,1,0],[0,1,1]], [[0,1,1],[1,1,0]], [[1,1,1],[0,1,0]], [[1]], [[1,1]]
+
+const BOARD_SIZE = 8;
+
+const PIECES: Piece[] = [
+  [[1, 1], [1, 1]],
+  [[1], [1], [1]],
+  [[1, 1, 1]],
+  [[1, 0], [1, 0], [1, 1]],
+  [[0, 1], [0, 1], [1, 1]],
+  [[1, 1, 1], [0, 1, 0]],
+  [[1, 1, 0], [0, 1, 1]],
+  [[0, 1, 1], [1, 1, 0]],
 ];
 
-function seededRand(seed: number) {
-  let x = Math.sin(seed) * 10000;
-  return x - Math.floor(x);
-}
-function makeLevel(level: number) {
-  const b = emptyBoard();
-  const fill = Math.min(34, 7 + level);
-  for (let i = 0; i < fill; i++) {
-    const r = Math.floor(seededRand(level * 55 + i) * SIZE);
-    const c = Math.floor(seededRand(level * 77 + i) * SIZE);
-    b[r][c] = true;
-  }
-  return b;
+function emptyBoard(): Cell[][] {
+  return Array.from({ length: BOARD_SIZE }, () =>
+    Array.from({ length: BOARD_SIZE }, () => 0 as Cell)
+  );
 }
 
-export default function Page() {
-  const [address, setAddress] = useState("");
+function seededBoard(level: number): Cell[][] {
+  const board = emptyBoard();
+  const count = Math.min(6 + level, 22);
+
+  for (let i = 0; i < count; i++) {
+    const r = (i * 3 + level * 2) % BOARD_SIZE;
+    const c = (i * 5 + level) % BOARD_SIZE;
+    board[r][c] = 1;
+  }
+
+  return board;
+}
+
+function makePieces(level: number): Piece[] {
+  return [0, 1, 2].map((i) => PIECES[(level + i * 3) % PIECES.length]);
+}
+
+function canPlace(board: Cell[][], piece: Piece, row: number, col: number) {
+  for (let r = 0; r < piece.length; r++) {
+    for (let c = 0; c < piece[r].length; c++) {
+      if (!piece[r][c]) continue;
+      const br = row + r;
+      const bc = col + c;
+      if (br < 0 || bc < 0 || br >= BOARD_SIZE || bc >= BOARD_SIZE) return false;
+      if (board[br][bc]) return false;
+    }
+  }
+  return true;
+}
+
+function placePiece(board: Cell[][], piece: Piece, row: number, col: number) {
+  const next = board.map((r) => [...r]) as Cell[][];
+
+  for (let r = 0; r < piece.length; r++) {
+    for (let c = 0; c < piece[r].length; c++) {
+      if (piece[r][c]) next[row + r][col + c] = 1;
+    }
+  }
+
+  let cleared = 0;
+
+  for (let r = 0; r < BOARD_SIZE; r++) {
+    if (next[r].every(Boolean)) {
+      next[r] = Array.from({ length: BOARD_SIZE }, () => 0 as Cell);
+      cleared++;
+    }
+  }
+
+  for (let c = 0; c < BOARD_SIZE; c++) {
+    let full = true;
+    for (let r = 0; r < BOARD_SIZE; r++) {
+      if (!next[r][c]) full = false;
+    }
+
+    if (full) {
+      for (let r = 0; r < BOARD_SIZE; r++) next[r][c] = 0;
+      cleared++;
+    }
+  }
+
+  return { board: next, cleared };
+}
+
+export default function Home() {
   const [level, setLevel] = useState(1);
-  const [board, setBoard] = useState<boolean[][]>(() => makeLevel(1));
+  const [board, setBoard] = useState<Cell[][]>(() => seededBoard(1));
+  const [pieces, setPieces] = useState<Piece[]>(() => makePieces(1));
   const [selected, setSelected] = useState(0);
   const [score, setScore] = useState(0);
   const [moves, setMoves] = useState(0);
-  const [completed, setCompleted] = useState<number[]>([]);
-  const [log, setLog] = useState("Connect wallet, clear blocks, win levels, then mint NFT rewards.");
-  const currentPieces = useMemo(() => [0, 2, 3].map((i) => pieces[(i + level + moves) % pieces.length]), [level, moves]);
-  const target = 90 + level * 8;
-  const won = score >= target;
+  const [completed, setCompleted] = useState(0);
+  const [wallet, setWallet] = useState("");
+  const [message, setMessage] = useState("Level 1 started.");
+  const [faucetClaimed, setFaucetClaimed] = useState(false);
+  const [mintedToday, setMintedToday] = useState(false);
+
+  const targetScore = useMemo(() => level * 80 + 18, [level]);
+  const levelDone = score >= targetScore;
 
   async function connectWallet() {
-    try {
-      if (!window.ethereum) throw new Error("Install MetaMask, OKX Wallet, or Rabby first.");
-      await window.ethereum.request({ method: "wallet_addEthereumChain", params: [RITUAL_CHAIN] });
-      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" }) as string[];
-      setAddress(accounts[0] || "");
-      setLog("Wallet connected on Ritual Testnet.");
-    } catch (e) { setLog(e instanceof Error ? e.message : "Wallet connection failed."); }
-  }
-  function resetLevel(n = level) { setLevel(n); setBoard(makeLevel(n)); setScore(0); setMoves(0); setLog(`Level ${n} started.`); }
-  function canPlace(piece: Piece, r: number, c: number) {
-    for (let y = 0; y < piece.length; y++) for (let x = 0; x < piece[y].length; x++) if (piece[y][x]) {
-      if (r + y >= SIZE || c + x >= SIZE || board[r + y][c + x]) return false;
-    }
-    return true;
-  }
-  function clearLines(b: boolean[][]) {
-    const rows = b.map((row) => row.every(Boolean));
-    const cols = Array.from({ length: SIZE }, (_, c) => b.every((row) => row[c]));
-    let cleared = rows.filter(Boolean).length + cols.filter(Boolean).length;
-    const nb = b.map((row) => [...row]);
-    rows.forEach((v, r) => { if (v) for (let c = 0; c < SIZE; c++) nb[r][c] = false; });
-    cols.forEach((v, c) => { if (v) for (let r = 0; r < SIZE; r++) nb[r][c] = false; });
-    return { nb, cleared };
-  }
-  function place(r: number, c: number) {
-    if (won) return;
-    const p = currentPieces[selected];
-    if (!canPlace(p, r, c)) { setLog("Cannot place this block here."); return; }
-    const nb = board.map((row) => [...row]);
-    let blocks = 0;
-    for (let y = 0; y < p.length; y++) for (let x = 0; x < p[y].length; x++) if (p[y][x]) { nb[r+y][c+x] = true; blocks++; }
-    const cleared = clearLines(nb);
-    const add = blocks * 5 + cleared.cleared * 30;
-    const nextScore = score + add;
-    setBoard(cleared.nb); setScore(nextScore); setMoves(moves + 1); setSelected((selected + 1) % 3);
-    if (nextScore >= target) { setCompleted((prev) => Array.from(new Set([...prev, level]))); setLog(`Level ${level} complete. You can mint your NFT reward.`); }
-    else setLog(`+${add} points. Clear rows or columns to finish faster.`);
-  }
-  async function callApi(path: string, body: object) {
-    const res = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const data = await res.json();
-    if (!data.ok) throw new Error(data.error || "Request failed");
-    return data;
-  }
-  async function faucet() {
-    try { if (!address) throw new Error("Connect wallet first."); const d = await callApi("/api/faucet", { address }); setLog(`Faucet sent 0.01 RITUAL. Tx: ${d.txHash}`); }
-    catch(e){ setLog(e instanceof Error ? e.message : "Faucet failed"); }
-  }
-  async function mint() {
-    try { if (!address) throw new Error("Connect wallet first."); if (!won) throw new Error("Win the current level before minting."); const d = await callApi("/api/mint", { address, level }); setLog(`NFT minted for level ${level}. Tx: ${d.txHash}`); }
-    catch(e){ setLog(e instanceof Error ? e.message : "Mint failed"); }
-  }
-  function nextLevel() { resetLevel(Math.min(50, level + 1)); }
+    const eth = (window as any).ethereum;
 
-  return <main className="page"><div className="shell">
-    <div className="top"><div className="brand"><h1>RITUAL BLOCK PUZZLE</h1><p>50 modern levels · faucet · blockchain NFT reward per winning level</p></div><div className="pill">Ritual Testnet · Chain 1979</div></div>
-    <div className="grid">
-      <section className="panel"><h2>Player</h2><button className="btn" onClick={connectWallet}>{address ? "Wallet Connected" : "Connect Wallet"}</button><p className="wallet">{address || "No wallet connected"}</p><button className="btn good" onClick={faucet}>Faucet 0.01 RITUAL</button><p className="log">One faucet claim per wallet.</p><h2>Stats</h2><div className="stat"><span>Level</span><b>{level}/50</b></div><div className="stat"><span>Score</span><b>{score}/{target}</b></div><div className="stat"><span>Moves</span><b>{moves}</b></div><div className="stat"><span>Completed</span><b>{completed.length}</b></div></section>
-      <section className="panel"><div className="boardWrap"><div className="board">{board.map((row,r)=>row.map((v,c)=><button key={`${r}-${c}`} aria-label={`cell ${r} ${c}`} onClick={()=>place(r,c)} className={`cell ${v ? "filled" : ""}`} />))}</div></div><div className="pieces">{currentPieces.map((p,i)=><button key={i} onClick={()=>setSelected(i)} className={`piece ${selected===i ? "active" : ""}`}><div className="mini">{p.map((row,y)=><div className="miniRow" key={y}>{row.map((v,x)=><span key={x} className={`miniCell ${v ? "on" : ""}`} />)}</div>)}</div></button>)}</div><p className="log">{log}</p><button className="btn secondary" onClick={()=>resetLevel()}>Restart Level</button> <button className="btn" disabled={!won || level>=50} onClick={nextLevel}>Next Level</button> <button className="btn warn" disabled={!won} onClick={mint}>Mint Level NFT</button></section>
-      <section className="panel"><h2>50 Levels</h2><div className="levelGrid">{Array.from({length:50},(_,i)=>i+1).map(n=><button key={n} onClick={()=>resetLevel(n)} className={`level ${n===level ? "current" : ""} ${completed.includes(n) ? "done" : ""}`}>{n}</button>)}</div><h2 style={{marginTop:18}}>Rules</h2><p className="log">Place blocks on the board. Full rows or columns are cleared. Reach the target score to complete the level. NFT mint is limited to one time per day per wallet by the server route.</p></section>
-    </div>
-  </div></main>;
+    if (!eth) {
+      setMessage("Please install MetaMask, OKX Wallet, or Rabby.");
+      return;
+    }
+
+    try {
+      const accounts = await eth.request({ method: "eth_requestAccounts" });
+      setWallet(accounts[0]);
+
+      try {
+        await eth.request({
+          method: "wallet_switchEthereumChain",
+          params: [{ chainId: "0x7bb" }],
+        });
+      } catch {
+        await eth.request({
+          method: "wallet_addEthereumChain",
+          params: [
+            {
+              chainId: "0x7bb",
+              chainName: "Ritual Testnet",
+              nativeCurrency: {
+                name: "RITUAL",
+                symbol: "RITUAL",
+                decimals: 18,
+              },
+              rpcUrls: ["https://rpc.ritualfoundation.org"],
+              blockExplorerUrls: ["https://explorer.ritualfoundation.org"],
+            },
+          ],
+        });
+      }
+
+      setMessage("Wallet connected.");
+    } catch {
+      setMessage("Wallet connection failed.");
+    }
+  }
+
+  async function claimFaucet() {
+    if (!wallet) {
+      setMessage("Connect wallet first.");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/faucet", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: wallet }),
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        setFaucetClaimed(true);
+        setMessage(data.message || "Faucet claimed: 0.01 RITUAL.");
+      } else {
+        setMessage(data.error || "Faucet failed.");
+      }
+    } catch {
+      setMessage("Faucet API error.");
+    }
+  }
+
+  async function mintNFT() {
+    if (!wallet) {
+      setMessage("Connect wallet first.");
+      return;
+    }
+
+    if (!levelDone) {
+      setMessage("Complete this level before minting NFT.");
+      return;
+    }
+
+    try {
+      const res = await fetch("/api/mint", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ address: wallet, level }),
+      });
+
+      const data = await res.json();
+
+      if (data.success) {
+        setMintedToday(true);
+        setCompleted((v) => Math.max(v, level));
+        setMessage(data.message || `Level ${level} NFT minted.`);
+      } else {
+        setMessage(data.error || "Mint failed.");
+      }
+    } catch {
+      setMessage("Mint API error.");
+    }
+  }
+
+  function restartLevel(nextLevel = level) {
+    setLevel(nextLevel);
+    setBoard(seededBoard(nextLevel));
+    setPieces(makePieces(nextLevel));
+    setSelected(0);
+    setScore(0);
+    setMoves(0);
+    setMintedToday(false);
+    setMessage(`Level ${nextLevel} started.`);
+  }
+
+  function handleCellClick(row: number, col: number) {
+    const piece = pieces[selected];
+    if (!piece) return;
+
+    if (!canPlace(board, piece, row, col)) {
+      setMessage("Cannot place block here.");
+      return;
+    }
+
+    const result = placePiece(board, piece, row, col);
+    const gain = piece.flat().filter(Boolean).length * 10 + result.cleared * 50;
+
+    const nextPieces = pieces.map((p, i) => (i === selected ? [] : p));
+    const allUsed = nextPieces.every((p) => p.length === 0);
+
+    setBoard(result.board);
+    setPieces(allUsed ? makePieces(level + moves + 1) : nextPieces);
+    setScore((s) => s + gain);
+    setMoves((m) => m + 1);
+    setMessage(result.cleared ? `Great! Cleared ${result.cleared} line(s).` : "Block placed.");
+  }
+
+  function goNextLevel() {
+    if (!levelDone) {
+      setMessage("Reach target score first.");
+      return;
+    }
+
+    const next = Math.min(level + 1, 50);
+    setCompleted((v) => Math.max(v, level));
+    restartLevel(next);
+  }
+
+  return (
+    <main className="min-h-screen bg-[#100b2d] text-white px-8 py-7">
+      <div className="mx-auto max-w-[1280px]">
+        <header className="mb-6 flex items-center justify-between">
+          <div>
+            <h1 className="text-4xl font-black tracking-wide">RITUAL BLOCK PUZZLE</h1>
+            <p className="mt-2 text-indigo-100">
+              50 modern levels · faucet · blockchain NFT reward per winning level
+            </p>
+          </div>
+
+          <div className="rounded-full border border-cyan-300/30 bg-white/10 px-5 py-3">
+            Ritual Testnet · Chain 1979
+          </div>
+        </header>
+
+        <section className="grid grid-cols-[300px_1fr_310px] gap-5">
+          <aside className="rounded-3xl border border-white/10 bg-white/5 p-5">
+            <h2 className="text-lg font-bold">Player</h2>
+
+            <button
+              onClick={connectWallet}
+              className="mt-4 rounded-2xl bg-gradient-to-r from-cyan-400 to-violet-500 px-5 py-3 font-black"
+            >
+              {wallet ? "Wallet Connected" : "Connect Wallet"}
+            </button>
+
+            <p className="mt-4 break-all text-xs text-indigo-100">
+              {wallet || "No wallet connected"}
+            </p>
+
+            <button
+              onClick={claimFaucet}
+              className="mt-4 rounded-2xl bg-gradient-to-r from-emerald-400 to-cyan-400 px-5 py-3 font-black"
+            >
+              {faucetClaimed ? "Faucet Claimed" : "Faucet 0.01 RITUAL"}
+            </button>
+
+            <p className="mt-3 text-sm text-indigo-100">
+              One faucet claim per wallet.
+            </p>
+
+            <div className="mt-14">
+              <h2 className="text-lg font-bold">Stats</h2>
+
+              <div className="mt-5 space-y-3 text-indigo-100">
+                <div className="flex justify-between border-b border-white/10 pb-3">
+                  <span>Level</span>
+                  <b>{level}/50</b>
+                </div>
+                <div className="flex justify-between border-b border-white/10 pb-3">
+                  <span>Score</span>
+                  <b>{score}/{targetScore}</b>
+                </div>
+                <div className="flex justify-between border-b border-white/10 pb-3">
+                  <span>Moves</span>
+                  <b>{moves}</b>
+                </div>
+                <div className="flex justify-between border-b border-white/10 pb-3">
+                  <span>Completed</span>
+                  <b>{completed}</b>
+                </div>
+              </div>
+            </div>
+          </aside>
+
+          <section className="rounded-3xl border border-white/10 bg-white/5 p-5">
+            <div className="mx-auto grid w-fit grid-cols-8 gap-2 rounded-3xl border border-cyan-300/20 bg-slate-900/70 p-5">
+              {board.map((row, r) =>
+                row.map((cell, c) => (
+                  <button
+                    key={`${r}-${c}`}
+                    onClick={() => handleCellClick(r, c)}
+                    className={`h-12 w-12 rounded-xl border border-white/10 transition hover:border-cyan-300 ${
+                      cell
+                        ? "bg-gradient-to-br from-cyan-300 to-fuchsia-500 shadow-[0_0_18px_rgba(34,211,238,.8)]"
+                        : "bg-white/8"
+                    }`}
+                  />
+                ))
+              )}
+            </div>
+
+            <div className="mt-5 flex justify-center gap-4">
+              {pieces.map((piece, index) => (
+                <button
+                  key={index}
+                  onClick={() => setSelected(index)}
+                  className={`min-h-[90px] min-w-[90px] rounded-2xl border p-3 ${
+                    selected === index
+                      ? "border-cyan-300 shadow-[0_0_18px_rgba(34,211,238,.7)]"
+                      : "border-white/10"
+                  }`}
+                >
+                  {piece.length > 0 ? (
+                    <div
+                      className="grid gap-1"
+                      style={{
+                        gridTemplateColumns: `repeat(${piece[0].length}, 16px)`,
+                      }}
+                    >
+                      {piece.flatMap((row, r) =>
+                        row.map((cell, c) => (
+                          <span
+                            key={`${r}-${c}`}
+                            className={`h-4 w-4 rounded ${
+                              cell
+                                ? "bg-gradient-to-br from-yellow-300 to-fuchsia-500 shadow-[0_0_10px_rgba(236,72,153,.8)]"
+                                : "bg-white/10"
+                            }`}
+                          />
+                        ))
+                      )}
+                    </div>
+                  ) : (
+                    <span className="text-sm text-white/40">Used</span>
+                  )}
+                </button>
+              ))}
+            </div>
+
+            <p className="mt-5 text-sm text-indigo-100">{message}</p>
+
+            <div className="mt-14 flex gap-3">
+              <button
+                onClick={() => restartLevel(level)}
+                className="rounded-2xl bg-white/15 px-5 py-3 font-black"
+              >
+                Restart Level
+              </button>
+
+              <button
+                onClick={goNextLevel}
+                className="rounded-2xl bg-gradient-to-r from-cyan-400 to-violet-500 px-5 py-3 font-black"
+              >
+                Next Level
+              </button>
+
+              <button
+                onClick={mintNFT}
+                className="rounded-2xl bg-gradient-to-r from-yellow-500 to-pink-500 px-5 py-3 font-black"
+              >
+                {mintedToday ? "Minted Today" : "Mint Level NFT"}
+              </button>
+            </div>
+          </section>
+
+          <aside className="rounded-3xl border border-white/10 bg-white/5 p-5">
+            <h2 className="text-lg font-black">50 Levels</h2>
+
+            <div className="mt-4 grid grid-cols-5 gap-2">
+              {Array.from({ length: 50 }, (_, i) => i + 1).map((n) => (
+                <button
+                  key={n}
+                  onClick={() => restartLevel(n)}
+                  className={`rounded-xl border px-3 py-3 font-bold ${
+                    n === level
+                      ? "border-cyan-300 bg-cyan-400 text-slate-950"
+                      : "border-white/10 bg-white/10"
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-6">
+              <h2 className="text-lg font-black">Rules</h2>
+              <p className="mt-4 text-sm leading-6 text-indigo-100">
+                Place blocks on the board. Full rows or columns are cleared.
+                Reach the target score to complete the level. NFT mint is
+                limited to one time per day per wallet by the server route.
+              </p>
+            </div>
+          </aside>
+        </section>
+      </div>
+    </main>
+  );
 }

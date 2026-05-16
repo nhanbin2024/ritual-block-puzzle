@@ -77,7 +77,6 @@ export default function Page() {
   const [mintedToday, setMintedToday] = useState(false);
   const [paused, setPaused] = useState(false);
   const [musicOn, setMusicOn] = useState(false);
-  const [lastTx, setLastTx] = useState("");
 
   const boardRef = useRef(board);
   const pieceRef = useRef(piece);
@@ -231,14 +230,6 @@ export default function Page() {
     }
   }
 
-  function disconnectWallet() {
-    setWallet("");
-    setFaucetClaimed(false);
-    setMintedToday(false);
-    setLastTx("");
-    setMessage("Wallet disconnected.");
-  }
-
   useEffect(() => {
     const id = setInterval(() => {
       move(0, 1);
@@ -327,26 +318,19 @@ export default function Page() {
       return;
     }
 
-    setMessage("Sending faucet transaction...");
+    const res = await fetch("/api/faucet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address: wallet }),
+    });
 
-    try {
-      const res = await fetch("/api/faucet", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: wallet }),
-      });
+    const data = await res.json();
 
-      const data = await res.json();
-
-      if (data.success) {
-        setFaucetClaimed(true);
-        setLastTx(data.txHash || "");
-        setMessage(data.message || "Faucet sent 0.01 RITUAL successfully.");
-      } else {
-        setMessage(data.error || "Faucet failed.");
-      }
-    } catch {
-      setMessage("Faucet API error.");
+    if (data.success) {
+      setFaucetClaimed(true);
+      setMessage(data.message || "Faucet claimed: 0.01 RITUAL.");
+    } else {
+      setMessage(data.error || "Faucet failed.");
     }
   }
 
@@ -361,27 +345,20 @@ export default function Page() {
       return;
     }
 
-    setMessage("Minting NFT on Ritual Testnet...");
+    const res = await fetch("/api/mint", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ address: wallet, level }),
+    });
 
-    try {
-      const res = await fetch("/api/mint", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ address: wallet, level }),
-      });
+    const data = await res.json();
 
-      const data = await res.json();
-
-      if (data.success) {
-        setMintedToday(true);
-        setCompleted((v) => Math.max(v, level));
-        setLastTx(data.txHash || "");
-        setMessage(data.message || `Level ${level} NFT minted successfully.`);
-      } else {
-        setMessage(data.error || "Mint failed.");
-      }
-    } catch {
-      setMessage("Mint API error.");
+    if (data.success) {
+      setMintedToday(true);
+      setCompleted((v) => Math.max(v, level));
+      setMessage(data.message || `Level ${level} NFT minted successfully.`);
+    } else {
+      setMessage(data.error || "Mint failed.");
     }
   }
 
@@ -449,15 +426,6 @@ export default function Page() {
             >
               {wallet ? "Wallet Connected" : "Connect Wallet"}
             </button>
-
-            {wallet && (
-              <button
-                onClick={disconnectWallet}
-                className="mt-3 w-full rounded-2xl border border-red-400/60 bg-red-500/20 py-3 text-lg font-black text-red-100"
-              >
-                Disconnect
-              </button>
-            )}
 
             <p className="mt-4 break-all text-sm text-cyan-100">
               {shortAddress(wallet)}
@@ -557,19 +525,6 @@ export default function Page() {
 
             <p className="mt-5 text-center text-lg text-cyan-100">{message}</p>
 
-            {lastTx && (
-              <p className="mt-2 text-center text-sm text-emerald-300">
-                TX:{" "}
-                <a
-                  href={`https://explorer.ritualfoundation.org/tx/${lastTx}`}
-                  target="_blank"
-                  className="underline"
-                >
-                  {lastTx.slice(0, 10)}...{lastTx.slice(-8)}
-                </a>
-              </p>
-            )}
-
             <div className="mt-6 flex justify-center gap-4">
               <button
                 onClick={() => restartLevel(level)}
@@ -614,7 +569,7 @@ export default function Page() {
 
               <p className="mt-2">Network: Ritual Testnet</p>
               <p>Chain ID: 1979</p>
-              <p>Faucet: 0.01 RITUAL / wallet / day</p>
+              <p>Faucet: 0.01 RITUAL / wallet</p>
               <p>NFT mint: 1 time / day / wallet</p>
             </div>
 
